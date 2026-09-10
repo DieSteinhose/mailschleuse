@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/diesteinhose/mailschleuse/internal/mailparse"
@@ -47,17 +48,26 @@ type Options struct {
 	Logger     *slog.Logger
 }
 
-// Server is the HTTP handler for API and UI.
+// Server serves the API and the UI. It is an http.Handler, plus a Shutdown
+// hook that releases the long-lived connections a graceful stop would
+// otherwise wait for.
 type Server struct {
-	opts Options
+	opts    Options
+	handler http.Handler
+
+	// shutdown is closed once the process is stopping. The event stream is
+	// open for as long as a browser tab is, so without this signal every
+	// container stop would sit out its full grace period and be killed.
+	shutdown chan struct{}
+	once     sync.Once
 }
 
-// NewHandler builds the HTTP handler tree.
-func NewHandler(opts Options) http.Handler {
+// New builds the HTTP handler tree.
+func New(opts Options) *Server {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	s := &Server{opts: opts}
+	s := &Server{opts: opts, shutdown: make(chan struct{})}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -87,9 +97,21 @@ func NewHandler(opts Options) http.Handler {
 		outer := http.NewServeMux()
 		outer.Handle(base+"/", http.StripPrefix(base, handler))
 		outer.Handle(base, http.RedirectHandler(base+"/", http.StatusMovedPermanently))
-		return outer
+		handler = outer
 	}
-	return handler
+	s.handler = handler
+	return s
+}
+
+// ServeHTTP makes the server usable wherever an http.Handler is expected.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.handler.ServeHTTP(w, r)
+}
+
+// Shutdown ends the streaming responses so http.Server.Shutdown can finish.
+// Register it with http.Server.RegisterOnShutdown. Calling it twice is safe.
+func (s *Server) Shutdown() {
+	s.once.Do(func() { close(s.shutdown) })
 }
 
 // --- middleware -------------------------------------------------------------
@@ -472,6 +494,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.shutdown:
+			// Tell the browser not to reconnect against a dying process.
+			fmt.Fprint(w, "event: shutdown\ndata: {}\n\n")
+			flusher.Flush()
 			return
 		case <-heartbeat.C:
 			fmt.Fprint(w, ": ping\n\n")

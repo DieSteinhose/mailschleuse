@@ -109,25 +109,30 @@ func run() error {
 		Logger:         logger,
 	})
 
+	webServer := web.New(web.Options{
+		Store:      messages,
+		Version:    version,
+		Hostname:   cfg.Hostname,
+		BasePath:   cfg.BasePath,
+		Username:   cfg.WebUsername,
+		Password:   cfg.WebPassword,
+		CORSOrigin: cfg.CORSOrigin,
+		ReadOnly:   cfg.ReadOnlyMode,
+		MaxSize:    cfg.MaxSizeBytes,
+		Endpoints:  describeEndpoints(cfg),
+		Routes:     describeRoutes(cfg),
+		Logger:     logger,
+	})
+
 	httpServer := &http.Server{
-		Handler: web.NewHandler(web.Options{
-			Store:      messages,
-			Version:    version,
-			Hostname:   cfg.Hostname,
-			BasePath:   cfg.BasePath,
-			Username:   cfg.WebUsername,
-			Password:   cfg.WebPassword,
-			CORSOrigin: cfg.CORSOrigin,
-			ReadOnly:   cfg.ReadOnlyMode,
-			MaxSize:    cfg.MaxSizeBytes,
-			Endpoints:  describeEndpoints(cfg),
-			Routes:     describeRoutes(cfg),
-			Logger:     logger,
-		}),
+		Handler:           webServer,
 		ReadHeaderTimeout: 20 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelDebug),
 	}
+	// Without this the event stream keeps the graceful shutdown waiting until
+	// the container runtime loses patience and sends SIGKILL.
+	httpServer.RegisterOnShutdown(webServer.Shutdown)
 
 	// Bind every listener before serving so a port clash fails the start
 	// instead of leaving the service half up.
@@ -198,9 +203,14 @@ func run() error {
 	case <-stopped:
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	httpServer.Shutdown(shutdownCtx)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		// Something is still holding a connection: drop it rather than let the
+		// runtime kill the process.
+		logger.Warn("graceful shutdown timed out, closing connections", "error", err)
+		httpServer.Close()
+	}
 	smtpServer.Close()
 	pop3Server.Close()
 	wg.Wait()

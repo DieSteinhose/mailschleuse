@@ -1,13 +1,16 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/diesteinhose/mailschleuse/internal/mailparse"
 	"github.com/diesteinhose/mailschleuse/internal/store"
@@ -34,7 +37,7 @@ func newTestServer(t *testing.T, mutate func(*Options)) (*httptest.Server, *stor
 	if mutate != nil {
 		mutate(&opts)
 	}
-	srv := httptest.NewServer(NewHandler(opts))
+	srv := httptest.NewServer(New(opts))
 	t.Cleanup(srv.Close)
 	return srv, messages
 }
@@ -539,4 +542,68 @@ func TestInlineImageIsRendered(t *testing.T) {
 	if !strings.Contains(string(body), "attachments/"+part) {
 		t.Errorf("preview does not reference the attachment endpoint: %q", body)
 	}
+}
+
+// TestShutdownReleasesEventStream guards the reason container stops used to
+// take the full grace period and end in SIGKILL: the event stream is never
+// idle, so a graceful shutdown waited for it until the runtime gave up.
+func TestShutdownReleasesEventStream(t *testing.T) {
+	messages, err := store.New(store.Options{Mailboxes: []string{"inbox"}, MaxMessages: 10, MaxSize: 1 << 20})
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	handler := New(Options{
+		Store:    messages,
+		BasePath: "/",
+		MaxSize:  1 << 20,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	httpServer := &http.Server{Handler: handler}
+	httpServer.RegisterOnShutdown(handler.Shutdown)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go httpServer.Serve(listener)
+
+	resp, err := http.Get("http://" + listener.Addr().String() + "/api/events")
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read the preamble so the request is definitely in flight.
+	buf := make([]byte, 256)
+	if _, err := resp.Body.Read(buf); err != nil {
+		t.Fatalf("read preamble: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		done <- httpServer.Shutdown(ctx)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("shutdown did not complete: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown is still waiting for the event stream")
+	}
+
+	// The stream itself must have ended rather than been cut mid-flight.
+	rest, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(buf)+string(rest), "shutdown") {
+		t.Errorf("client was not told about the shutdown: %q", string(buf)+string(rest))
+	}
+}
+
+func TestShutdownIsIdempotent(t *testing.T) {
+	handler := New(Options{BasePath: "/", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	handler.Shutdown()
+	handler.Shutdown() // must not panic on a second close
 }
