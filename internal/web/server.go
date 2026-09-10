@@ -43,6 +43,7 @@ type Options struct {
 	ReadOnly   bool
 	MaxSize    int64
 	Endpoints  []Endpoint
+	Routes     []string
 	Logger     *slog.Logger
 }
 
@@ -189,6 +190,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"hostname":       s.opts.Hostname,
 		"mailboxes":      s.opts.Store.Stats(),
 		"endpoints":      s.opts.Endpoints,
+		"routes":         s.opts.Routes,
 		"readOnly":       s.opts.ReadOnly,
 		"maxMessageSize": s.opts.MaxSize,
 	})

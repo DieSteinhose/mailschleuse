@@ -109,11 +109,13 @@ Where a message ends up is decided in this order:
 1. **Routing header** - a message carrying `X-Mailschleuse-Mailbox: inbox` goes
    into that mailbox. Handy for scripts that submit over SMTP but want to
    simulate *incoming* mail. Disable with `MS_SMTP_HEADER_ROUTING=false`.
-2. **Login name** - with `MS_SMTP_MAILBOX_FROM_USERNAME=true`, an SMTP client
+2. **Recipient route** - `MS_SMTP_ROUTES` redirects mail by its destination
+   address, see below.
+3. **Login name** - with `MS_SMTP_MAILBOX_FROM_USERNAME=true`, an SMTP client
    authenticating as `inbox` delivers into `inbox`. The same switch exists for
    POP3 (`MS_POP3_MAILBOX_FROM_USERNAME=true`), which lets one endpoint serve
    every mailbox: log in as `outbox` to read what your application sent.
-3. **Default** - `MS_SMTP_MAILBOX` for SMTP (`outbox`), `MS_POP3_MAILBOX` for
+4. **Default** - `MS_SMTP_MAILBOX` for SMTP (`outbox`), `MS_POP3_MAILBOX` for
    POP3 (`inbox`).
 
 More mailboxes are a single variable:
@@ -121,6 +123,44 @@ More mailboxes are a single variable:
 ```env
 MS_MAILBOXES=inbox,outbox,newsletter,billing
 ```
+
+### When an application mails itself
+
+Many applications verify their mail setup by sending a message to their own
+address and then waiting for it to come back. With the default split that check
+can never pass: the message is submitted over SMTP, so it is stored in `outbox`,
+while the application polls POP3, which serves `inbox`.
+
+A recipient route closes that loop for exactly the addresses you name:
+
+```env
+MS_SMTP_ROUTES=helpdesk@example.com=inbox
+```
+
+Now mail *to* `helpdesk@example.com` is stored in `inbox` and the application
+finds it on its next poll, while everything it sends to anyone else still goes
+to `outbox` and stays there.
+
+Patterns are an exact address, a domain (`*@example.com` or `@example.com`), a
+local part (`support@*`) or the catch-all `*`. Rules are separated by `;` and
+the first matching rule wins per recipient:
+
+```env
+MS_SMTP_ROUTES=helpdesk@example.com=inbox; *@intern.example=inbox; *=outbox
+```
+
+A rule may name several mailboxes, which stores one copy in each - useful when
+you want the self-test to be fetchable *and* to stay visible among the outgoing
+mail:
+
+```env
+MS_SMTP_ROUTES=helpdesk@example.com=inbox,outbox
+```
+
+One caveat worth stating plainly: a route is a deliberate loop. Route only
+addresses your application does not send regular mail to, otherwise its own
+notifications come back as new incoming mail - which is the situation the two
+mailboxes exist to prevent.
 
 ## Configuration
 
@@ -158,6 +198,7 @@ lists them all with their defaults.
 | `MS_SMTP_PASSWORD`              | *empty*  |                                                    |
 | `MS_SMTP_MAILBOX_FROM_USERNAME` | `false`  | Login name selects the target mailbox              |
 | `MS_SMTP_HEADER_ROUTING`        | `true`   | Honour `X-Mailschleuse-Mailbox`                    |
+| `MS_SMTP_ROUTES`                | *empty*  | Redirect by recipient, e.g. `helpdesk@example.com=inbox` |
 | `MS_SMTP_ADD_RECEIVED`          | `true`   | Prepend a `Received:` header like a real MTA       |
 | `MS_SMTP_MAX_RECIPIENTS`        | `100`    | Recipients accepted per message                    |
 

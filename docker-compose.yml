@@ -39,6 +39,7 @@ services:
       MS_SMTP_PASSWORD: ${MS_SMTP_PASSWORD:-}
       MS_SMTP_MAILBOX_FROM_USERNAME: ${MS_SMTP_MAILBOX_FROM_USERNAME:-false}
       MS_SMTP_HEADER_ROUTING: ${MS_SMTP_HEADER_ROUTING:-true}
+      MS_SMTP_ROUTES: ${MS_SMTP_ROUTES:-}
 
       # POP3: which mailbox is served and who may fetch
       MS_POP3_MAILBOX: ${MS_POP3_MAILBOX:-inbox}

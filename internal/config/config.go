@@ -63,6 +63,7 @@ type Config struct {
 	SMTPMailbox     string
 	SMTPUserRouting bool
 	SMTPHeaderRoute bool
+	SMTPRoutes      []Route
 	SMTPAddReceived bool
 	SMTPMaxRcpt     int
 
@@ -161,7 +162,13 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	return c, c.validate()
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	if c.SMTPRoutes, err = ParseRoutes(env("MS_SMTP_ROUTES", ""), c.HasMailbox); err != nil {
+		return nil, fmt.Errorf("MS_SMTP_ROUTES: %w", err)
+	}
+	return c, nil
 }
 
 func (c *Config) validate() error {

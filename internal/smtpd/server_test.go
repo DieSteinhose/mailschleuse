@@ -303,3 +303,108 @@ func writeMessage(client *smtp.Client, from, to, body string) error {
 	}
 	return w.Close()
 }
+
+func TestRecipientRouteDeliversIntoInbox(t *testing.T) {
+	// The case this exists for: an application verifies its setup by mailing
+	// itself. The message is submitted over SMTP but has to be fetchable over
+	// POP3, so the address it uses is routed into the inbox.
+	addr, messages := newTestServer(t, func(o *Options) {
+		o.Routes = []config.Route{{Pattern: "helpdesk@example.com", Mailboxes: []string{"inbox"}}}
+	})
+
+	body := "From: helpdesk@example.com\r\nTo: helpdesk@example.com\r\n" +
+		"Subject: Getting started test email #0a364097\r\n\r\nself test\r\n"
+	if err := smtp.SendMail(addr, nil, "helpdesk@example.com", []string{"helpdesk@example.com"}, []byte(body)); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	list, total, _ := messages.List(store.ListOptions{Mailbox: "inbox"})
+	if total != 1 {
+		t.Fatalf("inbox total = %d, want 1", total)
+	}
+	if !strings.Contains(list[0].Subject, "Getting started") {
+		t.Errorf("subject = %q", list[0].Subject)
+	}
+	if _, outboxTotal, _ := messages.List(store.ListOptions{Mailbox: "outbox"}); outboxTotal != 0 {
+		t.Errorf("outbox total = %d; a routed message belongs only where it was routed", outboxTotal)
+	}
+}
+
+func TestUnroutedRecipientsStillUseTheDefault(t *testing.T) {
+	addr, messages := newTestServer(t, func(o *Options) {
+		o.Routes = []config.Route{{Pattern: "helpdesk@example.com", Mailboxes: []string{"inbox"}}}
+	})
+
+	if err := smtp.SendMail(addr, nil, "helpdesk@example.com", []string{"verify-external@discard.example"},
+		[]byte("Subject: external check\r\n\r\nhi\r\n")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if _, total, _ := messages.List(store.ListOptions{Mailbox: "outbox"}); total != 1 {
+		t.Errorf("outbox total = %d, want 1", total)
+	}
+	if _, total, _ := messages.List(store.ListOptions{Mailbox: "inbox"}); total != 0 {
+		t.Errorf("inbox total = %d, want 0", total)
+	}
+}
+
+func TestRouteCanDeliverIntoSeveralMailboxes(t *testing.T) {
+	addr, messages := newTestServer(t, func(o *Options) {
+		o.Routes = []config.Route{{Pattern: "*@example.com", Mailboxes: []string{"inbox", "outbox"}}}
+	})
+
+	if err := smtp.SendMail(addr, nil, "app@example.com", []string{"user@example.com"},
+		[]byte("Subject: both\r\n\r\nhi\r\n")); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	for _, mailbox := range []string{"inbox", "outbox"} {
+		if _, total, _ := messages.List(store.ListOptions{Mailbox: mailbox}); total != 1 {
+			t.Errorf("%s total = %d, want 1", mailbox, total)
+		}
+	}
+}
+
+func TestSeveralRecipientsSplitAcrossMailboxes(t *testing.T) {
+	addr, messages := newTestServer(t, func(o *Options) {
+		o.Routes = []config.Route{
+			{Pattern: "helpdesk@example.com", Mailboxes: []string{"inbox"}},
+			{Pattern: "*", Mailboxes: []string{"outbox"}},
+		}
+	})
+
+	client, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	client.Hello("test")
+	client.Mail("app@example.com")
+	client.Rcpt("helpdesk@example.com")
+	client.Rcpt("someone@elsewhere.test")
+	w, err := client.Data()
+	if err != nil {
+		t.Fatalf("data: %v", err)
+	}
+	w.Write([]byte("Subject: two recipients\r\n\r\nhi\r\n"))
+	w.Close()
+	client.Quit()
+
+	for _, mailbox := range []string{"inbox", "outbox"} {
+		if _, total, _ := messages.List(store.ListOptions{Mailbox: mailbox}); total != 1 {
+			t.Errorf("%s total = %d, want one copy per matched mailbox", mailbox, total)
+		}
+	}
+}
+
+func TestRoutingHeaderBeatsRecipientRoute(t *testing.T) {
+	addr, messages := newTestServer(t, func(o *Options) {
+		o.Routes = []config.Route{{Pattern: "*", Mailboxes: []string{"inbox"}}}
+	})
+
+	body := fmt.Sprintf("%s: outbox\r\nSubject: explicit\r\n\r\nhi\r\n", RoutingHeader)
+	if err := smtp.SendMail(addr, nil, "a@example.com", []string{"b@example.com"}, []byte(body)); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if _, total, _ := messages.List(store.ListOptions{Mailbox: "outbox"}); total != 1 {
+		t.Errorf("outbox total = %d; the explicit header must win", total)
+	}
+}

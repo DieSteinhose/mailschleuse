@@ -86,6 +86,7 @@ func run() error {
 		DefaultMailbox: cfg.SMTPMailbox,
 		UserRouting:    cfg.SMTPUserRouting,
 		HeaderRouting:  cfg.SMTPHeaderRoute,
+		Routes:         cfg.SMTPRoutes,
 		AddReceived:    cfg.SMTPAddReceived,
 		MaxSize:        cfg.MaxSizeBytes,
 		MaxRecipients:  cfg.SMTPMaxRcpt,
@@ -120,6 +121,7 @@ func run() error {
 			ReadOnly:   cfg.ReadOnlyMode,
 			MaxSize:    cfg.MaxSizeBytes,
 			Endpoints:  describeEndpoints(cfg),
+			Routes:     describeRoutes(cfg),
 			Logger:     logger,
 		}),
 		ReadHeaderTimeout: 20 * time.Second,
@@ -326,6 +328,16 @@ func describeEndpoints(cfg *config.Config) []web.Endpoint {
 		})
 	}
 	return endpoints
+}
+
+// describeRoutes renders the recipient routes for the UI's connection panel,
+// so a message landing somewhere unexpected is explainable at a glance.
+func describeRoutes(cfg *config.Config) []string {
+	out := make([]string, 0, len(cfg.SMTPRoutes))
+	for _, route := range cfg.SMTPRoutes {
+		out = append(out, route.String())
+	}
+	return out
 }
 
 // portOf extracts the port from a listen address such as ":1025".

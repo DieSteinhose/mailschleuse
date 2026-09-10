@@ -419,6 +419,18 @@ function openEndpoints() {
         <dt>Encryption</dt><dd>${escapeHTML(endpoint.tls)}</dd>
       </dl>
     </div>`).join('') : '<p>No protocol listeners are enabled.</p>';
+
+  const routes = state.config?.routes || [];
+  if (routes.length) {
+    dom.endpointsBody.innerHTML += `
+      <div class="endpoint">
+        <h3><span class="tag">routes</span> mail addressed to these recipients is redirected</h3>
+        <dl>${routes.map((route) => {
+          const [pattern, targets] = route.split('=');
+          return `<dt>${escapeHTML(pattern)}</dt><dd>${escapeHTML(targets)}</dd>`;
+        }).join('')}</dl>
+      </div>`;
+  }
   dom.endpointsDialog.showModal();
 }
 

@@ -37,6 +37,7 @@ type Options struct {
 	DefaultMailbox string
 	UserRouting    bool
 	HeaderRouting  bool
+	Routes         []config.Route
 	AddReceived    bool
 	MaxSize        int64
 	MaxRecipients  int
@@ -443,32 +444,39 @@ func (s *session) handleData() {
 		return
 	}
 
-	mailboxName := s.srv.resolveMailbox(s.username, body)
+	mailboxes := s.srv.resolveMailboxes(s.username, body, s.rcpts)
 	if s.srv.opts.AddReceived {
 		body = append(s.receivedHeader(), body...)
 	}
-
-	msg, err := s.srv.opts.Store.Deliver(mailboxName, "smtp", store.Envelope{
+	envelope := store.Envelope{
 		From:       s.from,
 		To:         append([]string(nil), s.rcpts...),
 		RemoteAddr: s.remoteAddr(),
 		Username:   s.username,
 		TLS:        s.tlsActive,
-	}, body)
+	}
 	s.resetTransaction()
-	if err != nil {
-		if errors.Is(err, store.ErrTooLarge) {
-			s.reply(552, "5.3.4 Message exceeds the %d byte limit", s.srv.opts.MaxSize)
+
+	// A message addressed to recipients in different mailboxes is stored once
+	// per mailbox, the same way an MTA delivers one message to several boxes.
+	queued := make([]string, 0, len(mailboxes))
+	for _, mailboxName := range mailboxes {
+		msg, err := s.srv.opts.Store.Deliver(mailboxName, "smtp", envelope, body)
+		if err != nil {
+			if errors.Is(err, store.ErrTooLarge) {
+				s.reply(552, "5.3.4 Message exceeds the %d byte limit", s.srv.opts.MaxSize)
+				return
+			}
+			s.srv.opts.Logger.Error("smtp delivery failed", "error", err, "mailbox", mailboxName)
+			s.reply(451, "4.3.0 Cannot store message: %v", err)
 			return
 		}
-		s.srv.opts.Logger.Error("smtp delivery failed", "error", err)
-		s.reply(451, "4.3.0 Cannot store message: %v", err)
-		return
+		s.srv.opts.Logger.Info("message accepted",
+			"protocol", "smtp", "mailbox", mailboxName, "id", msg.ID,
+			"from", envelope.From, "recipients", len(envelope.To), "bytes", msg.Size)
+		queued = append(queued, fmt.Sprintf("%s in mailbox %s", msg.ID, mailboxName))
 	}
-	s.srv.opts.Logger.Info("message accepted",
-		"protocol", "smtp", "mailbox", mailboxName, "id", msg.ID,
-		"from", msg.Envelope.From, "recipients", len(msg.Envelope.To), "bytes", msg.Size)
-	s.reply(250, "2.0.0 OK: queued as %s in mailbox %s", msg.ID, mailboxName)
+	s.reply(250, "2.0.0 OK: queued as %s", strings.Join(queued, ", "))
 }
 
 // readData reads the DATA payload, undoing dot-stuffing and normalising line
@@ -515,24 +523,56 @@ func (s *session) receivedHeader() []byte {
 		time.Now().Format(time.RFC1123Z)))
 }
 
-// resolveMailbox decides where a message is stored: an explicit routing header
-// wins, then the authenticated user name, then the configured default.
-func (s *Server) resolveMailbox(username string, body []byte) string {
+// resolveMailboxes decides where a message is stored. An explicit routing
+// header wins, then a recipient route, then the authenticated user name, then
+// the configured default. Only recipient routes can name more than one mailbox.
+func (s *Server) resolveMailboxes(username string, body []byte, recipients []string) []string {
 	if s.opts.HeaderRouting {
 		if name := headerValue(body, RoutingHeader); name != "" {
 			candidate := strings.ToLower(strings.TrimSpace(name))
 			if s.opts.Store.Has(candidate) {
-				return candidate
+				return []string{candidate}
 			}
 		}
 	}
+
+	if matched := s.matchRoutes(recipients); len(matched) > 0 {
+		return matched
+	}
+
 	if s.opts.UserRouting && username != "" {
 		candidate := strings.ToLower(strings.TrimSpace(username))
 		if s.opts.Store.Has(candidate) {
-			return candidate
+			return []string{candidate}
 		}
 	}
-	return s.opts.DefaultMailbox
+	return []string{s.opts.DefaultMailbox}
+}
+
+// matchRoutes collects the mailboxes the recipients route to. Each recipient
+// takes the first rule that matches it; duplicates collapse so a message is
+// never stored twice in the same mailbox.
+func (s *Server) matchRoutes(recipients []string) []string {
+	if len(s.opts.Routes) == 0 {
+		return nil
+	}
+	var matched []string
+	seen := map[string]bool{}
+	for _, recipient := range recipients {
+		for _, route := range s.opts.Routes {
+			if !route.Matches(recipient) {
+				continue
+			}
+			for _, mailbox := range route.Mailboxes {
+				if !seen[mailbox] && s.opts.Store.Has(mailbox) {
+					seen[mailbox] = true
+					matched = append(matched, mailbox)
+				}
+			}
+			break
+		}
+	}
+	return matched
 }
 
 // headerValue extracts a header from the raw message head without parsing the
