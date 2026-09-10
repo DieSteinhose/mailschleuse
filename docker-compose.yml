@@ -1,0 +1,68 @@
+# Mailschleuse - a self-contained mail sink for development and test setups.
+#
+#   cp .env.example .env   (optional, every value has a working default)
+#   docker compose up -d
+#
+# Web UI:  http://localhost:8080
+# SMTP:    localhost:1025   (everything your application sends lands in "outbox")
+# POP3:    localhost:1110   (your application fetches what you put into "inbox")
+
+services:
+  mailschleuse:
+    image: ${MS_IMAGE:-ghcr.io/diesteinhose/mailschleuse:latest}
+    # Uncomment to build the image locally instead of pulling it:
+    # build:
+    #   context: .
+    #   args:
+    #     VERSION: local
+    container_name: ${MS_CONTAINER_NAME:-mailschleuse}
+    restart: unless-stopped
+    ports:
+      - "${MS_HTTP_PORT:-8080}:8080"
+      - "${MS_SMTP_PORT:-1025}:1025"
+      - "${MS_POP3_PORT:-1110}:1110"
+    environment:
+      # Identity
+      MS_HOSTNAME: ${MS_HOSTNAME:-mailschleuse.local}
+      MS_PUBLIC_HOST: ${MS_PUBLIC_HOST:-localhost}
+      MS_MAILBOXES: ${MS_MAILBOXES:-inbox,outbox}
+
+      # Listeners inside the container (map them with the ports above)
+      MS_HTTP_ADDR: ":8080"
+      MS_SMTP_ADDR: ":1025"
+      MS_POP3_ADDR: ":1110"
+
+      # SMTP: where submitted mail is stored and who may submit
+      MS_SMTP_MAILBOX: ${MS_SMTP_MAILBOX:-outbox}
+      MS_SMTP_AUTH: ${MS_SMTP_AUTH:-optional}
+      MS_SMTP_USERNAME: ${MS_SMTP_USERNAME:-}
+      MS_SMTP_PASSWORD: ${MS_SMTP_PASSWORD:-}
+      MS_SMTP_MAILBOX_FROM_USERNAME: ${MS_SMTP_MAILBOX_FROM_USERNAME:-false}
+      MS_SMTP_HEADER_ROUTING: ${MS_SMTP_HEADER_ROUTING:-true}
+
+      # POP3: which mailbox is served and who may fetch
+      MS_POP3_MAILBOX: ${MS_POP3_MAILBOX:-inbox}
+      MS_POP3_USERNAME: ${MS_POP3_USERNAME:-}
+      MS_POP3_PASSWORD: ${MS_POP3_PASSWORD:-}
+      MS_POP3_MAILBOX_FROM_USERNAME: ${MS_POP3_MAILBOX_FROM_USERNAME:-false}
+
+      # Web UI
+      MS_WEB_USERNAME: ${MS_WEB_USERNAME:-}
+      MS_WEB_PASSWORD: ${MS_WEB_PASSWORD:-}
+      MS_WEB_READ_ONLY: ${MS_WEB_READ_ONLY:-false}
+
+      # Storage: drop MS_DATA_DIR to keep everything in memory only
+      MS_DATA_DIR: ${MS_DATA_DIR:-/data}
+      MS_MAX_MESSAGES: ${MS_MAX_MESSAGES:-500}
+      MS_MAX_MESSAGE_SIZE: ${MS_MAX_MESSAGE_SIZE:-25MB}
+
+      # TLS: "auto" serves a self-signed certificate for STARTTLS/STLS
+      MS_TLS_MODE: ${MS_TLS_MODE:-auto}
+
+      MS_LOG_LEVEL: ${MS_LOG_LEVEL:-info}
+      MS_LOG_FORMAT: ${MS_LOG_FORMAT:-text}
+    volumes:
+      - mailschleuse-data:/data
+
+volumes:
+  mailschleuse-data:

@@ -1,0 +1,13 @@
+# Local configuration and persisted mail
+.env
+/data/
+
+# Build output (anchored, so cmd/mailschleuse/ stays tracked)
+/dist/
+/mailschleuse
+/coverage.out
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (amd64, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: mailschleuse:ci
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          set -euo pipefail
+          docker run -d --name mailschleuse-ci \
+            -p 8080:8080 -p 1025:1025 -p 1110:1110 \
+            mailschleuse:ci
+
+          # Wait for the HTTP endpoint to answer.
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/healthz
+
+          # Deliver a message over SMTP and confirm it lands in the outbox.
+          python3 - <<'PY'
+          import smtplib
+          from email.message import EmailMessage
+
+          msg = EmailMessage()
+          msg["From"] = "app@example.com"
+          msg["To"] = "user@example.com"
+          msg["Subject"] = "CI smoke test"
+          msg.set_content("hello from CI")
+
+          with smtplib.SMTP("localhost", 1025, timeout=10) as smtp:
+              smtp.send_message(msg)
+          PY
+
+          curl -fsS "http://localhost:8080/api/messages?mailbox=outbox" | grep -q "CI smoke test"
+
+          # Put a message into the inbox and fetch it over POP3.
+          curl -fsS -X POST http://localhost:8080/api/messages \
+            -H 'Content-Type: application/json' \
+            -d '{"mailbox":"inbox","from":"customer@example.com","to":["support@example.com"],"subject":"POP3 smoke test","text":"please help"}'
+
+          python3 - <<'PY'
+          import poplib
+
+          pop = poplib.POP3("localhost", 1110, timeout=10)
+          pop.user("inbox")
+          pop.pass_("mailschleuse")
+          count = len(pop.list()[1])
+          assert count == 1, f"expected 1 message, got {count}"
+          body = b"\n".join(pop.retr(1)[1]).decode()
+          assert "POP3 smoke test" in body, body
+          pop.quit()
+          PY
+
+          echo "Image smoke test passed."
+
+      - name: Container logs
+        if: always()
+        run: docker logs mailschleuse-ci || true
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f mailschleuse-ci || true

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Mailschleuse</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath d='M7 11.5h18v9H7z' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M7.6 12.2 16 18l8.4-5.8' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="var(--accent)"/>
+      <path d="M7 11.5h18v9H7z" fill="none" stroke="var(--accent-text)" stroke-width="2.2" stroke-linejoin="round"/>
+      <path d="M7.6 12.2 16 18l8.4-5.8" fill="none" stroke="var(--accent-text)" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>
+    <div>
+      Mailschleuse
+      <small id="version">connecting...</small>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <div class="search">
+      <input id="search" type="search" placeholder="Search sender, subject, body..." aria-label="Search messages">
+    </div>
+    <button class="btn btn-primary" id="compose-btn" type="button">New message</button>
+    <button class="btn" id="endpoints-btn" type="button">Endpoints</button>
+    <button class="btn btn-icon btn-ghost" id="theme-btn" type="button" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  </div>
+</header>
+
+<main class="layout">
+  <nav class="sidebar" aria-label="Mailboxes">
+    <h2>Mailboxes</h2>
+    <div id="mailbox-list"></div>
+    <div class="sidebar-footer">
+      <button class="btn btn-ghost" id="mark-all-btn" type="button">Mark all read</button>
+      <button class="btn btn-ghost btn-danger" id="clear-btn" type="button">Empty mailbox</button>
+    </div>
+  </nav>
+
+  <section class="list-pane" aria-label="Message list">
+    <div class="list-head">
+      <h1><span id="list-title">Messages</span> <span class="meta" id="list-count"></span></h1>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-icon" id="refresh-btn" type="button" title="Reload" aria-label="Reload">⟳</button>
+    </div>
+    <ul class="messages" id="message-list"></ul>
+  </section>
+
+  <section class="detail-pane" id="detail-pane" aria-label="Message detail"></section>
+</main>
+
+<dialog id="compose-dialog">
+  <form method="dialog" id="compose-form">
+    <div class="dialog-head">
+      <h2>Compose message</h2>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-icon" type="button" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="field">
+        <label for="c-mailbox">Deliver into mailbox</label>
+        <select id="c-mailbox" required></select>
+        <div class="hint">The message is stored directly in this mailbox, exactly as if it had arrived over SMTP.</div>
+      </div>
+      <div class="field">
+        <label for="c-from">From</label>
+        <input id="c-from" required placeholder="Jane Customer &lt;jane@example.com&gt;" value="Jane Customer <jane@example.com>">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="c-to">To</label>
+          <input id="c-to" required placeholder="support@example.com" value="support@example.com">
+        </div>
+        <div class="field">
+          <label for="c-cc">Cc (optional)</label>
+          <input id="c-cc" placeholder="team@example.com">
+        </div>
+      </div>
+      <div class="field">
+        <label for="c-subject">Subject</label>
+        <input id="c-subject" placeholder="Printer on floor 2 is offline" value="Printer on floor 2 is offline">
+      </div>
+      <div class="field">
+        <label for="c-text">Plain text body</label>
+        <textarea id="c-text" placeholder="Hello,&#10;&#10;the printer stopped working this morning.">Hello,
+
+the printer on floor 2 stopped working this morning. Could you take a look?
+
+Kind regards
+Jane</textarea>
+      </div>
+      <div class="field">
+        <label for="c-html">HTML body (optional)</label>
+        <textarea id="c-html" placeholder="&lt;p&gt;Hello,&lt;/p&gt;"></textarea>
+        <div class="hint">Filling both bodies produces a multipart/alternative message.</div>
+      </div>
+      <div class="field">
+        <label for="c-headers">Extra headers (optional, one per line)</label>
+        <textarea id="c-headers" style="min-height:64px" placeholder="In-Reply-To: &lt;abc@example.com&gt;&#10;X-Priority: 1"></textarea>
+      </div>
+      <div class="field">
+        <label for="c-files">Attachments (optional)</label>
+        <input id="c-files" type="file" multiple>
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary" type="submit" id="c-submit">Deliver message</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="endpoints-dialog">
+  <div class="dialog-head">
+    <h2>Connection details</h2>
+    <span class="spacer"></span>
+    <button class="btn btn-ghost btn-icon" type="button" data-close aria-label="Close">✕</button>
+  </div>
+  <div class="dialog-body" id="endpoints-body"></div>
+  <div class="dialog-foot">
+    <button class="btn" type="button" data-close>Close</button>
+  </div>
+</dialog>
+
+<div class="toast-stack" id="toasts" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
